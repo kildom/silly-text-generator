@@ -1,0 +1,2 @@
+
+python -m train.py --compile=False --eval_iters=10 --batch_size=20 --eval_interval=50 --dim=48 --n_layers=3 --n_heads=3 --max_iters=100000 --device=cpu 

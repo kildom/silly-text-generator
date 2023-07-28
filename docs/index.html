@@ -1,0 +1,158 @@
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>Silly text generator</title>
+</head>
+
+<style>
+    body {
+        font-family: sans-serif;
+        padding: 1em 3em;
+        background: #EEE;
+    }
+
+    .label {
+        margin: 1.5em 0 0.5em 0;
+        font-weight: 900;
+        font-size: 120%;
+    }
+
+    .info {
+        font-size: 80%;
+        color: gray;
+        margin: 0 0 0.5em 3em;
+        width: 700px;
+    }
+
+    .buttonsContainer {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: nowrap;
+    }
+
+
+    .buttonsContainer>div {
+        padding: 0.2em 1em;
+        text-align: center;
+        color: white;
+        text-shadow: 0px 0px 4px #010038;
+        margin: 0.1em;
+        background-color: gray;
+    }
+
+    .buttonsContainer>div[data-sel="1"] {
+        box-shadow: inset 0px 0px 3px 2px #000000;
+    }
+
+    .buttonsContainer>div:hover {
+        box-shadow: inset 0px 0px 4px 1px #0F0;
+        cursor: pointer;
+    }
+
+    div#content {
+        width: 900px;
+        margin: 3em auto;
+        font-family: serif;
+        font-size: 120%;
+        background-color: white;
+        border: 1px solid #CCC;
+        padding: 2em 3em;
+        text-align: justify;
+        box-shadow: 0px 0px 0.5em #00000055;
+    }
+
+    p.output {
+        text-indent: 2.2em;
+    }
+
+    div#numLeft::before {
+        content: " Sentences remaining: ";
+        font-weight: normal;
+    }
+    div#numLeft {
+        font-weight: bold;
+        display: none;
+    }
+    div#numLeft::after {
+        content: ".";
+        font-weight: normal;
+    }
+    div#side {
+        float: right;
+        width: 600px;
+        font-size: 90%;
+        padding: 2em;
+        border: 1px solid #CCC;
+        background-color: white;
+        box-shadow: 0px 0px 0.5em #00000055;
+    }
+</style>
+
+<script src="main.js"></script>
+
+<body>
+
+    <div id="side">
+        My goal was to create a small and fast generator that runs in a browser and can be used as a placeholder text generator for the web.
+        I based this generator on the <a href="https://github.com/karpathy/llama2.c">llama2.c</a> project.
+        It was trained on the <a href="https://huggingface.co/datasets/roneneldan/TinyStories">TinyStories</a> dataset.<br><br>
+        Because of its size, the model is not able to create stories that make any sense, but they look like normal text.<br><br>
+        <a href="https://github.com/kildom/silly-text-generator">See on GitHub</a>.
+    </div>
+
+    <h1>Silly text generator demo</h1>
+
+    <div id="wait">
+        Please wait... Loading generator...
+    </div>
+
+    <div id="main">
+        <div class="label">Temperature</div>
+        <div class="info">
+            How random the output should be?
+            The lower value produces text that makes more sense, but sentences looks similar to each other and some phases are repeated.
+            The higher value produces text that makes less sense, but more random.
+        </div>
+        <div class="buttonsContainer" id="temperatureButtons">
+            <div style="background-color: #08006A;" data-value="0.2">0.2</div>
+            <div style="background-color: #3E0673;" data-value="0.4">0.4</div>
+            <div style="background-color: #770766;" data-value="0.6">0.6</div>
+            <div style="background-color: #C1042F;" data-value="0.8" data-sel="1">0.8</div>
+            <div style="background-color: #FA0104;" data-value="1.0">1.0</div>
+            <div style="background-color: #FF522D;" data-value="1.2">1.2</div>
+            <div style="background-color: #FFA35B;" data-value="1.4">1.4</div>
+            <div style="background-color: #FFE781;" data-value="1.6">1.6</div>
+            <div style="background-color: #fffedb;" data-value="1.8">1.8</div>
+        </div>
+        <div class="label">Paragraph</div>
+        <div class="info">How big the paragraphs should be?</div>
+        <div class="buttonsContainer" id="sizeButtons">
+            <div data-value="0">one sentence</div>
+            <div data-value="0.5">small</div>
+            <div data-value="1.0" data-sel="1">medium</div>
+            <div data-value="2.5">big</div>
+            <div data-value="-1">unlimited</div>
+        </div>
+        <div class="label">Generate</div>
+        <div class="info">Start generating the text by selecting the number of sentences.<div id="numLeft">0</div></div>
+        <div class="buttonsContainer" id="generateButtons">
+            <div data-type="1">1</div>
+            <div data-type="3">3</div>
+            <div data-type="10">10</div>
+            <div data-type="30">30</div>
+            <div data-type="100">100</div>
+            <div data-type="300">300</div>
+            <div data-type="1000">1000</div>
+            <div data-type="3000">3000</div>
+            <div data-type="10000">10000</div>
+            <div data-type="clear">clear all</div>
+        </div>
+        
+    </div>
+
+    <div id="content"></div>
+
+</body>
+
+</html>

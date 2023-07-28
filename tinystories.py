@@ -104,6 +104,7 @@ class PretokDataset(torch.utils.data.IterableDataset):
         super().__init__()
         self.split = split
         self.max_seq_len = max_seq_len
+        self.counter = 0
 
     def __iter__(self):
         # get worker info within a DataLoader
@@ -113,15 +114,17 @@ class PretokDataset(torch.utils.data.IterableDataset):
         rank = dist.get_rank() if dist.is_initialized() else 0
         # combine the worker_id and worker_rank to create a unique seed for rng
         seed = 42 + worker_id + 1337 * rank
-        rng = random.Random(seed)
+        rng = random.Random()
         print(f"Created a PretokDataset with rng seed {seed}")
         data_dir = os.path.join(DATA_CACHE_DIR, "TinyStories_all_data")
         shard_filenames = sorted(glob.glob(os.path.join(data_dir, "*.bin")))
         # train/test split. let's use only shard 0 for test split, rest train
         shard_filenames = shard_filenames[1:] if self.split == "train" else shard_filenames[:1]
         while True:
+            file_index = 0
             rng.shuffle(shard_filenames)
             for shard in shard_filenames:
+                file_index += 1
                 # open the dataset for reading but keep it on disk with memmap
                 m = np.memmap(shard, dtype=np.uint16, mode="r")
                 num_batches = len(m) // self.max_seq_len
@@ -129,13 +132,18 @@ class PretokDataset(torch.utils.data.IterableDataset):
                 assert num_batches > 0, "this shard is way too small? investigate."
                 ixs = list(range(num_batches))
                 rng.shuffle(ixs)
+                batch_index = 0
                 for ix in ixs:
+                    batch_index += 1
                     start = ix * self.max_seq_len
                     end = start + self.max_seq_len + 1
                     # calling .astype will copy the data into a new numpy array, now in RAM
-                    chunk = torch.from_numpy((m[start:end]).astype(np.int64))
+                    chunk = torch.from_numpy(m[start:end].astype(np.int64))
                     x = chunk[:-1]
                     y = chunk[1:]
+                    self.counter += 1
+                    if (self.counter % 500 == 0):
+                        print(f'Extracted {self.counter} batches, file {file_index}/{len(shard_filenames)}, batch {batch_index}/{len(ixs)}')
                     yield x, y
 
 

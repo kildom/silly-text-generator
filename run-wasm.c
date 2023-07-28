@@ -1,23 +1,53 @@
-/*
-Inference for Llama-2 Transformer model in pure C.
-
-Example compile: (see README for more details)
-$ gcc -O3 -o run run.c -lm
-
-Then run with:
-$ ./run
-*/
-
-#include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <math.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/mman.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdarg.h>
+#include <stdio.h>
+
+#define WASM_EXPORT(name) __attribute__((used)) __attribute__((export_name(#name)))
+#define WASM_IMPORT(module, name) __attribute__((used)) __attribute__((import_module(#module))) __attribute__((import_name(#name)))
+
+WASM_IMPORT(env, print)
+void env_print(const char * str);
+
+WASM_IMPORT(env, exit)
+void env_exit(int code);
+
+WASM_IMPORT(env, random)
+void env_random(void* buffer, uint32_t size);
+
+static void printf_impl(const char* fmt, ...) {
+    va_list argptr;
+    static char buffer[1024];
+    va_start(argptr, fmt);
+    vsprintf(buffer, fmt, argptr);
+    va_end(argptr);
+    env_print(buffer);
+}
+
+#undef RAND_MAX
+#define RAND_MAX 0x7FFFFFFF
+
+static int rand_buffer[256];
+static int rand_index = 256;
+
+static int rand_impl() {
+    if (rand_index >= 256) {
+        rand_index = 0;
+        env_random(rand_buffer, sizeof(rand_buffer));
+    }
+    return rand_buffer[rand_index++] & RAND_MAX;
+}
+
+#define exit env_exit
+#define printf printf_impl
+#define rand rand_impl
+
+//#define LOG(format, ...) fprintf(stderr, "\n\e[1;31m" format "\e[0m\n", ##__VA_ARGS__)
+#define LOG(format, ...)
+
 
 // ----------------------------------------------------------------------------
 // Transformer and RunState structs, and related memory management
@@ -31,6 +61,8 @@ typedef struct {
     int vocab_size; // vocabulary size, usually 256 (byte-level)
     int seq_len; // max sequence length
 } Config;
+
+#include "out-220k/model.bin.c"
 
 typedef struct {
     // token embedding table
@@ -72,6 +104,8 @@ typedef struct {
     float* key_cache;   // (layer, seq_len, dim)
     float* value_cache; // (layer, seq_len, dim)
 } RunState;
+
+
 
 void malloc_run_state(RunState* s, Config* p) {
     // we calloc instead of malloc to keep valgrind happy
@@ -356,17 +390,6 @@ int argmax(float* v, int n) {
 
 // ----------------------------------------------------------------------------
 
-long time_in_ms() {
-    struct timespec time;
-    // Get the current time with nanosecond precision
-    if (clock_gettime(CLOCK_REALTIME, &time) == 0) {
-        return time.tv_sec * 1000 + time.tv_nsec / 1000000;
-    } else {
-        perror("clock_gettime");
-        return -1; // Return -1 to indicate an error
-    }
-}
-
 char* create_word(const char* token, int postfix_ed, int postfix_ing, int postfix_s)
 {
     static char buffer[1024];
@@ -399,16 +422,13 @@ char* create_word(const char* token, int postfix_ed, int postfix_ing, int postfi
     return buffer;
 }
 
-static char prev[1024] = "";
-static char this[1024];
+static char prev[32] = "";
+static char this[32];
 static int capitalize = 0;
 static int uppercase = 0;
 static int postfix_ed = 0;
 static int postfix_ing = 0;
 static int postfix_s = 0;
-
-//#define LOG(format, ...) fprintf(stderr, "\n\e[1;31m" format "\e[0m\n", ##__VA_ARGS__)
-#define LOG(format, ...)
 
 char* decode_token(const char* token) {
 
@@ -515,200 +535,60 @@ char* decode_token(const char* token) {
     return buffer;
 }
 
-uint16_t* check_compression(float* values, int length)
-{
-    int i;
-    static int exp_hist[256] = {0};
-    static int tz_hist[24] = {0};
-    uint32_t* bin_values = (uint32_t*)values;
-    uint16_t* output = malloc(2 * length);
-    uint16_t* output_ptr = output;
-    for (i = 0; i < length; i++) {
-        uint32_t value = bin_values[i];
-        uint32_t negative = (value >> 31) != 0;
-        uint32_t exp = (value >> 23) & 0xFF;
-        uint32_t frac = value & 0x7FFFFF;
-        exp_hist[exp]++;
-        if (exp == 0) {
-            //printf("zero: %06X\n", frac);
-        }
-        int tz = 0;
-        uint32_t fv = frac;
-        while (tz < 23 && !(fv & 1)) {
-            fv >>= 1;
-            tz++;
-        }
-        tz_hist[tz]++;
-        //frac = ((frac + 16) >> 5) << 5;
-        frac = ((frac + 4096) >> 13) << 13;
-        if (frac > 0x7FFFFF) {
-            frac = 0x7FFFFF;
-        }
-        bin_values[i] = (bin_values[i] & 0xFF800000) | frac;
+float* decompress_float() {
+    static float buffer[sizeof(model_weights) / sizeof(model_weights[0])];
+    uint32_t* dst = (uint32_t*)buffer;
+    for (int i = 0; i < sizeof(model_weights) / sizeof(model_weights[0]); i++) {
+        uint16_t value = model_weights[i];
+        int negative = value & 0x8000;
+        uint32_t exp = (value >> 10) & 0x1F;
+        uint32_t frac = value & 0x3FF;
         if (exp > 0) {
-            exp = exp - 127 + 24;
+            exp = exp - 24 + 127;
         }
-        uint16_t out_val = exp << 10;
-        out_val |= frac >> 13;
-        out_val |= negative ? 0x8000 : 0;
-        *output_ptr++ = out_val;
+        frac = frac << 13;
+        *dst++ = frac | (exp << 23) | (negative ? 0x80000000 : 0);
     }
-    for (i = 0; i < 256; i++) {
-        //printf("exp: %4d   %6d\n", i - 127, exp_hist[i]);
-    }
-    for (i = 0; i < 24; i++) {
-        //printf("frac tz: %4d   %6d\n", i, tz_hist[i] * (1 << i));
-    }
-    return output;
+    return buffer;
 }
 
-int main(int argc, char *argv[]) {
+static Config config = INIT_CONFIG;
+static TransformerWeights weights;
+static RunState state;
+static int next;
+static int token = 1;
+static int pos = 0;
 
-    // poor man's C argparse
-    int i;
-    char *checkpoint = NULL;  // e.g. out/model.bin
-    float temperature = 0.9f; // e.g. 1.0, or 0.0
-    int steps = 256;          // max number of steps to run for, 0: use seq_len
-    // 'checkpoint' is necessary arg
-    if (argc < 2) {
-        printf("Usage: %s <checkpoint_file> [temperature] [steps]\n", argv[0]);
-        return 1;
-    }
-    if (argc >= 2) {
-        checkpoint = argv[1];
-    }
-    if (argc >= 3) {
-        // optional temperature. 0.0 = (deterministic) argmax sampling. 1.0 = baseline
-        temperature = atof(argv[2]);
-    }
-    if (argc >= 4) {
-        steps = atoi(argv[3]);
-    }
+WASM_IMPORT(env, result)
+void env_result(const char* text);
 
-    // seed rng with time. if you want deterministic behavior use temperature 0.0
-    srand((unsigned int)time(NULL)); 
-    
+WASM_EXPORT(initialize)
+void initialize() {
+
+    //env_print("Initializing...");
+
     // read in the model.bin file
-    Config config;
-    TransformerWeights weights;
-    int fd = 0;
     float* data = NULL;
-    long file_size;
     {
-        FILE *file = fopen(checkpoint, "rb");
-        if (!file) {
-            printf("Unable to open the checkpoint file %s!\n", checkpoint);
-            return 1;
-        }
-        // read in the config header
-        if(fread(&config, sizeof(Config), 1, file) != 1) { return 1; }
-        // negative vocab size is hacky way of signaling unshared weights. bit yikes.
         int shared_weights = config.vocab_size > 0 ? 1 : 0;
         config.vocab_size = abs(config.vocab_size);
-        // figure out the file size
-        fseek(file, 0, SEEK_END); // move file pointer to end of file
-        file_size = ftell(file); // get the file size, in bytes
-        fclose(file);
-        // memory map the Transformer weights into the data pointer
-        fd = open(checkpoint, O_RDONLY); // open in read only mode
-        if (fd == -1) { printf("open failed!\n"); return 1; }
-        data = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (data == MAP_FAILED) { printf("mmap failed!\n"); return 1; }
-        float* data2 = malloc(file_size);
-        memcpy(data2, data, file_size);
-        data = data2;
-        float* weights_ptr = data + sizeof(Config)/sizeof(float);
-        int num = (file_size - sizeof(Config)) / sizeof(float);
-        uint16_t* o = check_compression(weights_ptr, num);
+        float* weights_ptr = decompress_float();
         checkpoint_init_weights(&weights, &config, weights_ptr, shared_weights);
-        char path[1024];
-        strcpy(path, checkpoint);
-        strcat(path, ".16");
-        file = fopen(path, "wb");
-        fwrite(&config, sizeof(config), 1, file);
-        fwrite(o, num * 2, 1, file);
-        fclose(file);
-        strcpy(path, checkpoint);
-        strcat(path, ".c");
-        file = fopen(path, "w");
-        fprintf(file, "#define INIT_CONFIG {\\\n");
-        fprintf(file, "    .dim = %d,\\\n", config.dim);
-        fprintf(file, "    .hidden_dim = %d,\\\n", config.hidden_dim);
-        fprintf(file, "    .n_layers = %d,\\\n", config.n_layers);
-        fprintf(file, "    .n_heads = %d,\\\n", config.n_heads);
-        fprintf(file, "    .n_kv_heads = %d,\\\n", config.n_kv_heads);
-        fprintf(file, "    .vocab_size = %d,\\\n", config.vocab_size);
-        fprintf(file, "    .seq_len = %d,\\\n", config.seq_len);
-        fprintf(file, "}\n");
-        fprintf(file, "static const uint16_t model_weights[%d] = {", num);
-        for (i = 0; i < num; i++) {
-            fprintf(file, "%s0x%04X,%s", i % 20 == 0 ? "\n    " : "", o[i], i % 20 != 19 && i != num - 1 ? " " : "");
-        }
-        fprintf(file, "\n};\n");
-        fclose(file);
-    }
-    // right now we cannot run for more than config.seq_len steps
-    if (steps <= 0) { steps = config.seq_len; }
-
-    // read in the tokenizer.bin file
-    char** vocab = (char**)malloc(config.vocab_size * sizeof(char*));
-    {
-        FILE *file = fopen("tokenizer2000.bin", "rb");
-        if (!file) {
-            printf("Unable to open the tokenizer file tokenizer.bin! Run "
-            "python tokenizer.py to convert tokenizer.model -> tokenizer.bin\n");
-            return 1;
-        }
-        int len;
-        for (int i = 0; i < config.vocab_size; i++) {
-            if(fread(&len, sizeof(int), 1, file) != 1) { return 1; }
-            vocab[i] = (char *)malloc(len + 1);
-            if(fread(vocab[i], len, 1, file) != 1) { return 1; }
-            vocab[i][len] = '\0'; // add the string terminating token
-        }
-        fclose(file);
-        char path[1024];
-        strcpy(path, checkpoint);
-        strcat(path, ".c");
-        file = fopen(path, "a");
-        fprintf(file, "static const char* const vocab[] = {");
-        int ll = 10000;
-        for (int i = 0; i < config.vocab_size; i++) {
-            const char* src = vocab[i];
-            char* dst = path;
-            while (*src) {
-                char c = *src++;
-                if (c == '"' || c == '\\') {
-                    *dst++ = '\\';
-                }
-                *dst++ = c;
-            }
-            *dst++ = 0;
-            if (ll + strlen(path) + 4 > 120) {
-                fprintf(file, "\n    ");
-                ll = 4;
-            }
-            ll += strlen(path) + 4;
-            fprintf(file, "\"%s\", ", path);
-        }
-        fprintf(file, "\n};\n");
-        fclose(file);
     }
 
     // create and init the application RunState
-    RunState state;
     malloc_run_state(&state, &config);
-    
-    // the current position we are in
-    long start = time_in_ms();
-    int next;
-    int token = 1; // 1 = BOS token in Llama-2 sentencepiece
-    int pos = 0;
-    while (pos < steps || token != 1) {
+}
 
-        if (pos % config.seq_len == 0) {
-            //printf("\n------------------\n");
-        }
+WASM_EXPORT(generate)
+void generate(int steps, float temperature) {
+
+    //env_print("Generating...");
+
+    steps += pos;
+
+    // the current position we are in
+    while (pos < steps || token != 1) {
 
         // forward the transformer to get logits for the next token
         transformer(token, pos % config.seq_len, &config, &state, &weights);
@@ -725,23 +605,11 @@ int main(int argc, char *argv[]) {
             // we now want to sample from this distribution to get the next token
             next = sample(state.logits, config.vocab_size);
         }
-        printf("%s", decode_token(vocab[next]));
-        fflush(stdout);
+        const char *part = decode_token(vocab[next]);
+        if (part[0]) env_result(part);
 
         // advance forward
         token = next;
         pos++;
     }
-
-    // report achieved tok/s
-    long end = time_in_ms();
-    printf("\nachieved tok/s: %f\n", steps / (double)(end-start)*1000);
-
-    // memory and file handles cleanup
-    free_run_state(&state);
-    for (int i = 0; i < config.vocab_size; i++) { free(vocab[i]); }
-    free(vocab);
-    if (data != MAP_FAILED) munmap(data, file_size);
-    if (fd != -1) close(fd);
-    return 0;
 }

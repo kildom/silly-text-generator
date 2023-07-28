@@ -24,6 +24,7 @@ from datetime import datetime
 from functools import partial
 
 import torch
+import torch._dynamo
 from model import Transformer, ModelArgs
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -52,6 +53,7 @@ n_layers = 6
 n_heads = 6
 multiple_of = 32
 dropout = 0.0
+vocab_size = 2000
 # adamw optimizer
 gradient_accumulation_steps = 4  # used to simulate larger batch sizes
 learning_rate = 5e-4  # max learning rate
@@ -108,6 +110,8 @@ if master_process:
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
+torch.set_num_threads(8)
+torch._dynamo.config.suppress_errors = True
 torch.manual_seed(1337 + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True  # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True  # allow tf32 on cudnn
@@ -139,7 +143,7 @@ model_args = dict(
     n_layers=n_layers,
     n_heads=n_heads,
     n_kv_heads=n_heads,
-    vocab_size=32000,
+    vocab_size=vocab_size,
     multiple_of=multiple_of,
     max_seq_len=max_seq_len,
     #dropout=dropout,

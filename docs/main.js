@@ -76,7 +76,7 @@ function S(q) {
 
 let sentencesRequested = 0;
 let timer = null;
-let temperature = 0.8;
+let temperature = 1;
 let lastParagraph = null;
 let paragraphMin = 2;
 let paragraphMax = 15;
@@ -133,19 +133,23 @@ function generateClick(event) {
 
 function temperatureClick(event) {
     let temp = parseFloat(event.srcElement.getAttribute("data-value"));
-    temperature = temp;
-    document.querySelectorAll('#temperatureButtons>div').forEach(e => e.setAttribute("data-sel", "0"));
-    event.srcElement.setAttribute("data-sel", "1");
+    if (!Number.isNaN(temp)) {
+        temperature = temp;
+        document.querySelectorAll('#temperatureButtons>div').forEach(e => e.setAttribute("data-sel", "0"));
+        event.srcElement.setAttribute("data-sel", "1");
+    }
 }
 
 function sizeClick(event) {
     let s = parseFloat(event.srcElement.getAttribute("data-value"));
-    paragraphScale = s;
-    if (paragraphRemaining == Number.POSITIVE_INFINITY) {
-        paragraphRemaining = 1;
+    if (!Number.isNaN(temp)) {
+        paragraphScale = s;
+        if (paragraphRemaining == Number.POSITIVE_INFINITY) {
+            paragraphRemaining = 1;
+        }
+        document.querySelectorAll('#sizeButtons>div').forEach(e => e.setAttribute("data-sel", "0"));
+        event.srcElement.setAttribute("data-sel", "1");
     }
-    document.querySelectorAll('#sizeButtons>div').forEach(e => e.setAttribute("data-sel", "0"));
-    event.srcElement.setAttribute("data-sel", "1");
 }
 
 function wasmReady() {
@@ -181,12 +185,12 @@ async function downloadWasm(url) {
     } = wasmInstance.exports);
 }
 
-window.__my__load_wasm = async function(dataURL) {
+window.__my__load_wasm = async function (dataURL) {
     await downloadWasm(dataURL);
     wasmLoaded();
 }
 
-window.onload = async function() {
+window.onload = async function () {
     try {
         await downloadWasm('run.wasm');
     } catch (e) {

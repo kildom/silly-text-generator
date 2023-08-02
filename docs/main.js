@@ -142,7 +142,7 @@ function temperatureClick(event) {
 
 function sizeClick(event) {
     let s = parseFloat(event.srcElement.getAttribute("data-value"));
-    if (!Number.isNaN(temp)) {
+    if (!Number.isNaN(s)) {
         paragraphScale = s;
         if (paragraphRemaining == Number.POSITIVE_INFINITY) {
             paragraphRemaining = 1;
